@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e .
+      - run: python -m unittest discover -s tests
+      - run: agent-merge-readiness examples/risky.diff --title "Sample" --check "scope guard:pass" --check "unit tests:pass" --check "secret scan:pass" --check "runbook drift:pass" --check "rollback plan:pass" --closeout examples/closeout.md --format json
