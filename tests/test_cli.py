@@ -125,6 +125,18 @@ class MergeReadinessTests(unittest.TestCase):
         self.assertEqual(payload["schema_version"], "agent-merge-readiness.v1")
         self.assertEqual(payload["verdict"], "ready")
 
+    def test_cli_needs_review_exits_nonzero(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            diff_path = Path(tmp) / "sample.diff"
+            diff_path.write_text(RISKY_DIFF, encoding="utf-8")
+            stream = StringIO()
+
+            with redirect_stdout(stream):
+                exit_code = main([str(diff_path), "--title", "Deploy auth migration"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("Verdict: needs-review", stream.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

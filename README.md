@@ -15,14 +15,14 @@ Agents often finish with a confident closeout, but reviewers still need to answe
 ## Install
 
 ```sh
-python -m pip install --upgrade pip
-python -m pip install -e .
+python3 -m pip install --upgrade pip
+python3 -m pip install -e .
 ```
 
 Or run without installing:
 
 ```sh
-PYTHONPATH=src python -m agent_merge_readiness examples/risky.diff \
+PYTHONPATH=src python3 -m agent_merge_readiness examples/risky.diff \
   --title "Deploy workflow migration" \
   --check "scope guard:pass" \
   --check "unit tests:pass" \
@@ -72,11 +72,15 @@ The tool is intentionally strict:
 
 It does not replace human review. It turns reviewer expectations into a repeatable gate.
 
+Exit code is `0` only when the verdict is `ready`; `needs-review` and `blocked` return `1`, while invalid input returns `2`.
+
 ## Development
 
 ```sh
-PYTHONPATH=src python -m unittest discover -s tests
-PYTHONPATH=src python -m agent_merge_readiness examples/risky.diff --title "Sample" --format json
+make test
+make lint
+make build
+make smoke
 ```
 
 ## Fit With The Agent Workflow Stack

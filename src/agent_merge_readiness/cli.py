@@ -368,4 +368,4 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(asdict(packet), indent=2))
     else:
         print(render_markdown(packet), end="")
-    return 1 if packet.verdict == "blocked" else 0
+    return 0 if packet.verdict == "ready" else 1
