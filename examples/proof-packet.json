@@ -1,0 +1,62 @@
+{
+  "schema_version": "agent-proof-packet.v1",
+  "title": "Deploy auth migration proof",
+  "verdict": "complete",
+  "changed_files": [
+    {
+      "path": ".github/workflows/deploy.yml",
+      "status": "modified",
+      "additions": 1,
+      "deletions": 0
+    },
+    {
+      "path": "migrations/20260602_add_users.sql",
+      "status": "added",
+      "additions": 2,
+      "deletions": 0
+    },
+    {
+      "path": "src/auth.py",
+      "status": "modified",
+      "additions": 1,
+      "deletions": 0
+    }
+  ],
+  "checks": [
+    {
+      "name": "scope guard",
+      "status": "pass",
+      "detail": ""
+    },
+    {
+      "name": "unit tests",
+      "status": "pass",
+      "detail": ""
+    },
+    {
+      "name": "secret scan",
+      "status": "pass",
+      "detail": ""
+    },
+    {
+      "name": "runbook drift",
+      "status": "pass",
+      "detail": ""
+    },
+    {
+      "name": "rollback plan",
+      "status": "pass",
+      "detail": ""
+    }
+  ],
+  "risks": [
+    "Deploy workflow permissions changed."
+  ],
+  "decisions": [
+    "Kept migration narrow."
+  ],
+  "evidence_files": [],
+  "command_receipts": [],
+  "open_questions": [],
+  "missing_evidence": []
+}

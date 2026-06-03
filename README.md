@@ -10,7 +10,9 @@ Agents often finish with a confident closeout, but reviewers still need to answe
 - Does the closeout name files, verification, and limitations?
 - Is the merge ready or just plausible?
 
-`agent-merge-readiness` reads a unified diff, optional check results, and an optional closeout note. It returns a compact readiness packet.
+`agent-merge-readiness` reads a unified diff, optional check results, optional
+proof-packet JSON, and an optional closeout note. It returns a compact readiness
+packet.
 
 ## Install
 
@@ -38,6 +40,9 @@ PYTHONPATH=src python3 -m agent_merge_readiness examples/risky.diff \
 git diff -- . | agent-merge-readiness - --title "Current agent change"
 agent-merge-readiness examples/risky.diff --title "Risky change" --format json
 agent-merge-readiness examples/risky.diff --title "Risky change" --check "ci:fail"
+agent-merge-readiness examples/risky.diff --title "Proof-backed change" \
+  --proof-packet examples/proof-packet.json \
+  --closeout examples/closeout.md
 ```
 
 ## Example Output
@@ -64,6 +69,8 @@ The tool is intentionally strict:
 
 - Any failed check blocks the merge.
 - Every agent diff needs scope evidence.
+- Proof packets must be `agent-proof-packet.v1`, `complete`, and aligned with
+  the current diff before their checks count.
 - Code changes need a passing test or CI check.
 - Security or config changes need secret-scan evidence.
 - CI or docs changes need runbook/workflow evidence.
@@ -88,5 +95,6 @@ make smoke
 - `agent-task-contract`: define the task before the run.
 - `agent-scope-guard`: prove the diff stayed in bounds.
 - `agent-change-risk`: choose gates from changed paths.
+- `agent-proof-packet`: provide review evidence that can be checked against the diff.
 - `agent-merge-readiness`: decide whether evidence is enough to merge.
 - `agent-run-ledger`: keep the run auditable after the fact.

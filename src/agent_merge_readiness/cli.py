@@ -33,6 +33,18 @@ class CloseoutEvidence:
 
 
 @dataclass(frozen=True)
+class ProofPacketEvidence:
+    path: str
+    exists: bool
+    schema_version: str
+    verdict: str
+    title: str
+    changed_files: list[str]
+    checks: list[CheckResult]
+    findings: list[str]
+
+
+@dataclass(frozen=True)
 class ReadinessPacket:
     schema_version: str
     title: str
@@ -43,6 +55,7 @@ class ReadinessPacket:
     risk_tags: list[str]
     checks: list[CheckResult]
     closeout: CloseoutEvidence
+    proof_packets: list[ProofPacketEvidence]
     missing_evidence: list[str]
     blocking_findings: list[str]
     reviewer_questions: list[str]
@@ -222,11 +235,87 @@ def inspect_closeout(closeout_text: str | None, files: list[ChangedFile]) -> Clo
     )
 
 
+def parse_proof_packet(
+    spec: str,
+    current_files: list[ChangedFile],
+    cwd: Path | None = None,
+) -> ProofPacketEvidence:
+    packet_path = Path(spec).expanduser()
+    if not packet_path.is_absolute() and cwd is not None:
+        packet_path = cwd / packet_path
+
+    display_path = spec
+    if not packet_path.exists() or not packet_path.is_file():
+        return ProofPacketEvidence(display_path, False, "", "", "", [], [], ["proof packet file is missing"])
+
+    try:
+        data = json.loads(packet_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return ProofPacketEvidence(display_path, True, "", "", "", [], [], [f"proof packet JSON is invalid: {exc}"])
+
+    if not isinstance(data, dict):
+        return ProofPacketEvidence(display_path, True, "", "", "", [], [], ["proof packet JSON must be an object"])
+
+    findings: list[str] = []
+    schema_version = str(data.get("schema_version") or "")
+    verdict_value = str(data.get("verdict") or "")
+    title = str(data.get("title") or "")
+    if schema_version != "agent-proof-packet.v1":
+        findings.append("proof packet schema_version is not agent-proof-packet.v1")
+    if verdict_value != "complete":
+        findings.append(f"proof packet verdict is {verdict_value or 'missing'}; expected complete")
+
+    raw_changed_files = data.get("changed_files")
+    packet_files: list[str] = []
+    if not isinstance(raw_changed_files, list):
+        findings.append("proof packet changed_files must be a list")
+    else:
+        for item in raw_changed_files:
+            if isinstance(item, dict) and item.get("path"):
+                packet_files.append(str(item["path"]))
+            else:
+                findings.append("proof packet changed_files item is missing a path")
+
+    current_paths = sorted(changed.path for changed in current_files)
+    packet_paths = sorted(packet_files)
+    if packet_paths != current_paths:
+        findings.append("proof packet changed files do not match the current diff")
+
+    raw_checks = data.get("checks")
+    packet_checks: list[CheckResult] = []
+    if not isinstance(raw_checks, list):
+        findings.append("proof packet checks must be a list")
+    else:
+        for item in raw_checks:
+            if isinstance(item, dict) and item.get("name"):
+                packet_checks.append(
+                    CheckResult(
+                        str(item["name"]),
+                        str(item.get("status") or "not-run"),
+                        str(item.get("detail") or ""),
+                    )
+                )
+            else:
+                findings.append("proof packet check item is missing a name")
+
+    return ProofPacketEvidence(
+        display_path,
+        True,
+        schema_version,
+        verdict_value,
+        title,
+        packet_files,
+        packet_checks,
+        findings,
+    )
+
+
 def missing_evidence_for(
     tags: list[str],
     level: str,
     checks: list[CheckResult],
     closeout: CloseoutEvidence,
+    proof_packets: list[ProofPacketEvidence],
 ) -> list[str]:
     missing: list[str] = []
     if not has_any_passing_check(checks):
@@ -252,11 +341,19 @@ def missing_evidence_for(
         missing.append("Closeout must state exact verification evidence.")
     if closeout.provided and not closeout.mentions_risks:
         missing.append("Closeout must state risks, limitations, or checks not run.")
+    if any(packet.findings for packet in proof_packets):
+        missing.append("All proof packets must be complete and match the current diff.")
     return missing
 
 
-def blocking_findings_for(checks: list[CheckResult]) -> list[str]:
-    return [f"Check failed: {check.name}" for check in checks if check.status == "fail"]
+def blocking_findings_for(
+    checks: list[CheckResult],
+    proof_packets: list[ProofPacketEvidence],
+) -> list[str]:
+    findings = [f"Check failed: {check.name}" for check in checks if check.status == "fail"]
+    for packet in proof_packets:
+        findings.extend(f"Proof packet `{packet.path}`: {finding}" for finding in packet.findings)
+    return findings
 
 
 def reviewer_questions(tags: list[str], missing: list[str], blockers: list[str]) -> list[str]:
@@ -289,15 +386,28 @@ def build_packet(
     title: str,
     check_specs: list[str] | None = None,
     closeout_text: str | None = None,
+    proof_packet_specs: list[str] | None = None,
+    cwd: Path | None = None,
 ) -> ReadinessPacket:
     files = parse_changed_files(diff_text)
     tags = infer_tags(files)
     score = risk_score(tags, files)
     level = risk_level(score)
     checks = [parse_check(spec) for spec in check_specs or []]
+    proof_packets = [parse_proof_packet(spec, files, cwd) for spec in proof_packet_specs or []]
+    for packet in proof_packets:
+        checks.extend(packet.checks)
+    checks.extend(
+        CheckResult(
+            f"proof packet: {packet.title or packet.path}",
+            "pass" if not packet.findings else "fail",
+            packet.verdict or "missing verdict",
+        )
+        for packet in proof_packets
+    )
     closeout = inspect_closeout(closeout_text, files)
-    blockers = blocking_findings_for(checks)
-    missing = missing_evidence_for(tags, level, checks, closeout)
+    blockers = blocking_findings_for(checks, proof_packets)
+    missing = missing_evidence_for(tags, level, checks, closeout, proof_packets)
     return ReadinessPacket(
         schema_version="agent-merge-readiness.v1",
         title=title,
@@ -308,6 +418,7 @@ def build_packet(
         risk_tags=tags,
         checks=checks,
         closeout=closeout,
+        proof_packets=proof_packets,
         missing_evidence=missing,
         blocking_findings=blockers,
         reviewer_questions=reviewer_questions(tags, missing, blockers),
@@ -333,6 +444,17 @@ def render_markdown(packet: ReadinessPacket) -> str:
     lines.extend(f"- {name}" for name in passing or ["none"])
     lines.extend(["", "## Blocking Findings", ""])
     lines.extend(f"- {finding}" for finding in packet.blocking_findings or ["none"])
+    lines.extend(["", "## Proof Packets", ""])
+    for proof_packet in packet.proof_packets:
+        status = "complete" if not proof_packet.findings else "invalid"
+        lines.append(
+            f"- {status}: `{proof_packet.path}` verdict `{proof_packet.verdict or 'missing'}` "
+            f"({len(proof_packet.changed_files)} changed file(s))"
+        )
+        for finding in proof_packet.findings:
+            lines.append(f"  - finding: {finding}")
+    if not packet.proof_packets:
+        lines.append("- none")
     lines.extend(["", "## Missing Evidence", ""])
     lines.extend(f"- {item}" for item in packet.missing_evidence or ["none"])
     lines.extend(["", "## Reviewer Questions", ""])
@@ -351,6 +473,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Evidence in the form 'name:pass', 'name:fail', 'name:skipped', or 'name:not-run'.",
     )
     parser.add_argument("--closeout", help="Optional path to agent closeout Markdown.")
+    parser.add_argument(
+        "--proof-packet",
+        action="append",
+        default=[],
+        help="agent-proof-packet.v1 JSON file that must be complete and match the diff.",
+    )
     parser.add_argument("--format", choices=["markdown", "json"], default="markdown")
     return parser
 
@@ -363,7 +491,7 @@ def main(argv: list[str] | None = None) -> int:
         print("No diff content provided.", file=sys.stderr)
         return 2
     closeout_text = read_text(args.closeout) if args.closeout else None
-    packet = build_packet(diff_text, args.title, args.check, closeout_text)
+    packet = build_packet(diff_text, args.title, args.check, closeout_text, args.proof_packet, Path.cwd())
     if args.format == "json":
         print(json.dumps(asdict(packet), indent=2))
     else:

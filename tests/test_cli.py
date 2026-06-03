@@ -46,6 +46,43 @@ Risks and limitations:
 """
 
 
+def write_proof_packet(root, *, verdict="complete", changed_files=None):
+    files = changed_files or [
+        ".github/workflows/deploy.yml",
+        "migrations/20260602_add_users.sql",
+        "src/auth.py",
+    ]
+    proof_packet = root / "proof-packet.json"
+    proof_packet.write_text(
+        json.dumps(
+            {
+                "schema_version": "agent-proof-packet.v1",
+                "title": "Deploy auth migration proof",
+                "verdict": verdict,
+                "changed_files": [
+                    {"path": path, "status": "modified", "additions": 1, "deletions": 0}
+                    for path in files
+                ],
+                "checks": [
+                    {"name": "scope guard", "status": "pass", "detail": ""},
+                    {"name": "unit tests", "status": "pass", "detail": ""},
+                    {"name": "secret scan", "status": "pass", "detail": ""},
+                    {"name": "runbook drift", "status": "pass", "detail": ""},
+                    {"name": "rollback plan", "status": "pass", "detail": ""},
+                ],
+                "risks": ["Deploy workflow permissions changed."],
+                "decisions": ["Kept migration narrow."],
+                "evidence_files": [],
+                "command_receipts": [],
+                "open_questions": [],
+                "missing_evidence": [] if verdict == "complete" else ["packet blocked"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return proof_packet
+
+
 class MergeReadinessTests(unittest.TestCase):
     def test_parse_changed_files(self) -> None:
         files = parse_changed_files(RISKY_DIFF)
@@ -87,6 +124,58 @@ class MergeReadinessTests(unittest.TestCase):
 
         self.assertEqual(packet.verdict, "ready")
         self.assertEqual(packet.missing_evidence, [])
+
+    def test_complete_proof_packet_can_supply_merge_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            proof_packet = write_proof_packet(root)
+            packet = build_packet(
+                RISKY_DIFF,
+                "Deploy auth migration",
+                closeout_text=GOOD_CLOSEOUT,
+                proof_packet_specs=[proof_packet.name],
+                cwd=root,
+            )
+
+        self.assertEqual(packet.verdict, "ready")
+        self.assertEqual(packet.proof_packets[0].verdict, "complete")
+        self.assertTrue(any(check.name == "proof packet: Deploy auth migration proof" for check in packet.checks))
+
+    def test_incomplete_proof_packet_blocks_merge(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            proof_packet = write_proof_packet(root, verdict="blocked")
+            packet = build_packet(
+                RISKY_DIFF,
+                "Deploy auth migration",
+                closeout_text=GOOD_CLOSEOUT,
+                proof_packet_specs=[proof_packet.name],
+                cwd=root,
+            )
+
+        self.assertEqual(packet.verdict, "blocked")
+        self.assertTrue(any("expected complete" in finding for finding in packet.blocking_findings))
+
+    def test_mismatched_proof_packet_blocks_merge(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            proof_packet = write_proof_packet(
+                root,
+                changed_files=[
+                    ".github/workflows/deploy.yml",
+                    "migrations/20260602_add_users.sql",
+                ],
+            )
+            packet = build_packet(
+                RISKY_DIFF,
+                "Deploy auth migration",
+                closeout_text=GOOD_CLOSEOUT,
+                proof_packet_specs=[proof_packet.name],
+                cwd=root,
+            )
+
+        self.assertEqual(packet.verdict, "blocked")
+        self.assertTrue(any("changed files do not match" in finding for finding in packet.blocking_findings))
 
     def test_cli_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -136,6 +225,33 @@ class MergeReadinessTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
         self.assertIn("Verdict: needs-review", stream.getvalue())
+
+    def test_cli_accepts_proof_packet(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            diff_path = root / "sample.diff"
+            closeout_path = root / "closeout.md"
+            proof_packet = write_proof_packet(root)
+            diff_path.write_text(RISKY_DIFF, encoding="utf-8")
+            closeout_path.write_text(GOOD_CLOSEOUT, encoding="utf-8")
+            stream = StringIO()
+
+            with redirect_stdout(stream):
+                exit_code = main(
+                    [
+                        str(diff_path),
+                        "--title",
+                        "Deploy auth migration",
+                        "--closeout",
+                        str(closeout_path),
+                        "--proof-packet",
+                        str(proof_packet),
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("## Proof Packets", stream.getvalue())
+        self.assertIn("complete:", stream.getvalue())
 
 
 if __name__ == "__main__":
